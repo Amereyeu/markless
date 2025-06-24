@@ -26,7 +26,7 @@ const getUrlDecoration = memoize((isImage) => vscode.window.createTextEditorDeco
     color: "transparent",
     textDecoration: "none; display: inline-block; width: 0;",
     before: {
-        contentText: isImage ? "🌄" : " 🔗",
+        contentText: isImage ? " 🅿" : " 🅻",
         fontWeight: "bold",
         color: "cyan",
     },
