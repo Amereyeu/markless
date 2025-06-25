@@ -1,7 +1,7 @@
 const vscode = require('vscode');
 const { hideDecoration, transparentDecoration, getUrlDecoration, getSvgDecoration } = require('./common-decorations');
 const { state } = require('./state');
-const {  memoize, nodeToHtml, svgToUri, htmlToSvg, DefaultMap, texToSvg, enableHoverImage } = require('./util');
+const {  memoize, nodeToHtml, svgToUri, htmlToSvg, DefaultMap, texToSvg, enableHoverImage, asyncMemoize } = require('./util');
 const { triggerUpdateDecorations, addDecoration, posToRange }  = require('./runner');
 const cheerio = require('cheerio');
 
@@ -54,7 +54,7 @@ function registerWebviewViewProvider (context) {
 	context.subscriptions.push(vscode.window.registerWebviewViewProvider("test.webview", {
 		resolveWebviewView: (webviewView) => {
 			webviewView.webview.options = { enableScripts: true };
-			const mermaidScriptUri = webviewView.webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, 'node_modules', 'mermaid', 'dist', 'mermaid.min.js'));
+			const mermaidScriptUri = webviewView.webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, 'src', 'mermaid.min.js'));
 			webviewView.webview.html = `
 					<!DOCTYPE html>
 					<html lang="en">
@@ -150,7 +150,7 @@ function bootstrap(context) {
 				textDecoration: "none; display: inline-block; width: 0;",
 				before: {
 					contentText: "",
-					textDecoration: "none; position: absolute; background: #ffaa00; top: 0.49em; bottom: 0.49em; width: 100%; mix-blend-mode: luminosity; border: outset;",
+					textDecoration: "none; position: absolute; background: #01fefe; width: 85%; border: none; height: 1px",
 				}
 			});
 			return (start, end) => {
@@ -165,7 +165,7 @@ function bootstrap(context) {
 				color: "transparent",
 				before: {
 					contentText: "",
-					textDecoration: "none; position: absolute; background: #ffaa00; top: -0.2em; bottom: -0.2em; width: 3px; border-radius: 99px; mix-blend-mode: luminosity;",
+					textDecoration: "none; position: absolute; background: #01fefe; top: -0.2em; bottom: -0.2em; width: 3px; border-radius: 99px; mix-blend-mode: luminosity;",
 				}
 			});
 			return (start, end) => {
@@ -181,13 +181,14 @@ function bootstrap(context) {
 		})()]],
 		["list", ["listItem", (() => {
 			const getBulletDecoration = memoize((level) => {
-				const listBullets = ["❧", "☯", "♠", "❀", "♚", "☬", "♣", "♥", "🙤", "⚜", "⚛", "⛇", "⚓", "☘", "☔"];
+				const listBullets = ["⬥", "⦁", "▶", "▪", "⚬", "◦" ];
 				return vscode.window.createTextEditorDecorationType({
 					color: "transparent",
 					textDecoration: "none; display: inline-block; width: 0;",
 					after: {
 						contentText: listBullets[level % listBullets.length],
-						fontWeight: "bold"
+						fontWeight: "bold",
+						color: "#01fefe"
 					},
 				});
 			});
@@ -197,7 +198,8 @@ function bootstrap(context) {
 					textDecoration: "none; display: inline-block; width: 0;",
 					after: {
 						contentText: checked ? "☑" : "☐",
-						fontWeight: "bold"
+						fontWeight: "bold",
+						color: "#01fefe"
 					},
 				});
 			});
@@ -250,8 +252,10 @@ function bootstrap(context) {
 		["inlineCode", ["inlineCode", (() => {
 			const codeDecoration = vscode.window.createTextEditorDecorationType({
 				// outline: "1px dotted"
-				border: "outset",
+				// border: "outset",
 				borderRadius: "5px",
+				backgroundColor: "#ddd",
+				color: "#000"
 			})
 			return (start, end) => {
 				addDecoration(codeDecoration, start, end);
@@ -261,7 +265,7 @@ function bootstrap(context) {
 		})()]],
 		["mermaid", ["code", (() => {
 			const getMermaidDecoration = (() => {
-				const _getTexDecoration = memoize(async (source, darkMode, height, fontFamily) => {
+				const _getMermaidDecoration = asyncMemoize(async (source, darkMode, height, fontFamily) => {
 					await webviewLoaded;
 					const svgString = await requestSvg({ source: source, darkMode: darkMode, fontFamily: fontFamily });
 					const svgNode = cheerio.load(svgString)('svg');
@@ -276,7 +280,7 @@ function bootstrap(context) {
 					// console.log('%c ', `font-size:400px; background:url(${svgUri}) no-repeat; background-size: contain;`);
 					return getSvgDecoration(svgUri, false); // Using mermaid theme instead
 				});
-				return (source, numLines) => _getTexDecoration(source, state.darkMode, (numLines + 2) * state.lineHeight, state.fontFamily);
+				return (source, numLines) => _getMermaidDecoration(source, state.darkMode, (numLines + 2) * state.lineHeight, state.fontFamily);
 			})();
 			return async (start, end, node) => {
 				if (!(node.lang === "mermaid")) return;
@@ -284,7 +288,10 @@ function bootstrap(context) {
 				if (!match) return;
 				const source = match[3]
 					, numLines = 1 + (source.match(/\n/g) || []).length;
-				const decoration = await getMermaidDecoration(source, numLines);
+				const decoration = await Promise.race([
+					getMermaidDecoration(source, numLines),
+					new Promise((_, rej) => setTimeout(() => { setTimeout(triggerUpdateDecorations, 500); rej(); }, 10))
+				]).catch(e => console.error("Mermaid took long to render.", e || ""));
 				if (decoration) {
 					addDecoration(decoration, start, end);
 				}
@@ -297,28 +304,6 @@ function bootstrap(context) {
 			addDecoration(hideDecoration, start, start + 1);
 			addDecoration(getUrlDecoration(false), start + match[1].length + 1, end);
 		}]],
-		["html", ["html", (() => {
-			const htmlDecoration = vscode.window.createTextEditorDecorationType({
-				color: "transparent",
-				textDecoration: "none; display: inline-block; width: 0;",
-				before: {
-					contentText: "</>",
-					fontWeight: "bold",
-					textDecoration: "none; font-size: small; vertical-align: middle;",
-					color: "cyan"
-				},
-			});
-			return (start, end) => {
-				const text = state.text.slice(start, end);
-				const match = /(<.+?>).+(<\/.+?>)/.exec(text);
-				if (match) {
-					addDecoration(htmlDecoration, start, start + match[1].length);
-					addDecoration(htmlDecoration, end - match[2].length, end);
-				} else {
-					addDecoration(htmlDecoration, start, end);
-				}
-			}
-		})()]],
 		["link", ["image", (start, end, node) => {
 			const text = state.text.slice(start, end);
 			const match = /!\[(.*)\]\(.+?\)/.exec(text);
